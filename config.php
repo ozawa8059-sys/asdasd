@@ -4,8 +4,8 @@ ob_start();
 
 // ================= CONFIGURATION =================
 $CONFIG = [
-    'password' => 'AdminSecure123!', // CHANGE THIS
-    'username' => 'admin',           // CHANGE THIS
+    'password' => 'Shuju@123', // CHANGE THIS
+    'username' => 'Shuju',           // CHANGE THIS
     'session_timeout' => 3600,
     'base_directory' => '/var/www/html',
     'allowed_ips' => [], // Add IPs like ['192.168.1.100'] for restriction
@@ -851,3 +851,4 @@ if (file_exists('admin_actions.log')) {
 <?php
 ob_end_flush();
 ?>
+
