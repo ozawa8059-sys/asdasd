@@ -4,7 +4,7 @@ session_start();
 // Check if the form is submitted
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Define the expected password
-    $expectedPassword = 'shuju@123'; // Replace 'hacker1337' with your desired password
+    $expectedPassword = 'Shuju@123'; // Replace 'hacker1337' with your desired password
 
     // Get the entered password from the form
     $enteredPassword = $_POST['password'];
